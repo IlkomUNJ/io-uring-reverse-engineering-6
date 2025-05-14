@@ -3,7 +3,7 @@ List in this section source and headers of io_uring. For each of the C source/he
 
 ## Source
 ### advice.c
-Store io_madvice & io_fadvice structures, both have the same exact attributes. Which make them basically the same thing. Except function body treat them as separate. Codes which make use of io_madvice are guarded by compilation macro, which make its relevant functions only active if the build flag is set. But functions that make use of io_fadvice are active all the time. The exact difference between io_madvice & io_fadvice will only known after exploring do_madvise function for io_madvice & vfs_fadvise function for io_fadvice. 
+Store io_madvice & io_fadvice structures, both have the same exact attributes. Which make them basically the same thing. Except function body treat them as separate. Codes which make use of io_madvice are guarded by compilation macro, which make its relevant functions only active if the build flag is set. But functions that make use of io_fadvice are active all the time. The exact difference between io_madvice & io_fadvice will only known after exploring do_madvise function for io_madvice & vfs_fadvise function for io_fadvice
 
 ### alloc_cache.c
 Implement memory cache allocation system for io_uring in order to minimize leftover allocation or deallocation in memory. io_alloc_cache_init() is used for initialize a cache with a fixed entries and io_alloc_cache_free() is used to release the cached memory. io_cache_alloc_new() is useed for handling new memory allocation using kmalloc with an option of init_clear. The function in this source all work together for an efficient memory management
