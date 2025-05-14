@@ -15,6 +15,6 @@ Score is mainly calculated from individual contributions made to the commit. The
 
 ## Team Members
 - Muhamad Rafli Andrea Bastedo (1313623009) 
-- M. Ilfi Faza
-- Nur Taufik Ashabur Ridho
-- Marcela Callista Kristianti
+- M. Ilfi Faza Nasibi (1313623030)
+- Nur Taufik Ashabur Ridho (1313623007)
+- Marcela Callista Kristianti (1313623031)
