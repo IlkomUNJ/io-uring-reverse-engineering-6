@@ -21,8 +21,6 @@ For this assigment, we want a little clarity regarding what kind of functions be
 |           | include/linux/kasan.h | kasan_mempool_unpoison_object | 1 |
 |           | include/linux/slab.h | kfree | 1 |
 |           | arch/alpha/include/asm/string.h | memset | 1 |
-| Source | Library | Function Utilized | Times Used |
-|--------|---------|-------------------|------------|
 | cancel.c | arch/mips/boot/tools/relocs.h | ARRAY_SIZE | 2 |
 |           | include/linux/atomic/atomic-instrumented.h | atomic_inc_return | 3 |
 |           | drivers/block/drbd/drbd_int.h | cancel | 2 |
