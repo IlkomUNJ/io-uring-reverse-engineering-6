@@ -15,6 +15,7 @@
 #include "io_uring.h"
 #include "fs.h"
 
+// Struktur untuk operasi renameat dalam io_uring
 struct io_rename {
 	struct file			*file;
 	int				old_dfd;
@@ -24,6 +25,7 @@ struct io_rename {
 	int				flags;
 };
 
+// Struktur untuk operasi unlinkat dalam io_uring
 struct io_unlink {
 	struct file			*file;
 	int				dfd;
@@ -31,6 +33,7 @@ struct io_unlink {
 	struct filename			*filename;
 };
 
+// Struktur untuk operasi mkdirat dalam io_uring
 struct io_mkdir {
 	struct file			*file;
 	int				dfd;
@@ -38,6 +41,7 @@ struct io_mkdir {
 	struct filename			*filename;
 };
 
+// Struktur untuk operasi symlinkat dalam io_uring
 struct io_link {
 	struct file			*file;
 	int				old_dfd;
@@ -47,22 +51,26 @@ struct io_link {
 	int				flags;
 };
 
+// Fungsi untuk menyiapkan operasi renameat
 int io_renameat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 {
 	struct io_rename *ren = io_kiocb_to_cmd(req, struct io_rename);
 	const char __user *oldf, *newf;
 
+	// Validasi argumen dari SQE
 	if (sqe->buf_index || sqe->splice_fd_in)
 		return -EINVAL;
 	if (unlikely(req->flags & REQ_F_FIXED_FILE))
 		return -EBADF;
 
+	// Ambil file descriptor dan path dari SQE
 	ren->old_dfd = READ_ONCE(sqe->fd);
 	oldf = u64_to_user_ptr(READ_ONCE(sqe->addr));
 	newf = u64_to_user_ptr(READ_ONCE(sqe->addr2));
 	ren->new_dfd = READ_ONCE(sqe->len);
 	ren->flags = READ_ONCE(sqe->rename_flags);
 
+	// Ambil nama file
 	ren->oldpath = getname(oldf);
 	if (IS_ERR(ren->oldpath))
 		return PTR_ERR(ren->oldpath);
@@ -78,13 +86,16 @@ int io_renameat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	return 0;
 }
 
+// Fungsi untuk melakukan operasi renameat
 int io_renameat(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_rename *ren = io_kiocb_to_cmd(req, struct io_rename);
 	int ret;
 
+	// Cek flag non-blocking
 	WARN_ON_ONCE(issue_flags & IO_URING_F_NONBLOCK);
 
+	// Lakukan operasi renameat
 	ret = do_renameat2(ren->old_dfd, ren->oldpath, ren->new_dfd,
 				ren->newpath, ren->flags);
 
@@ -93,6 +104,7 @@ int io_renameat(struct io_kiocb *req, unsigned int issue_flags)
 	return IOU_OK;
 }
 
+// Fungsi untuk membersihkan setelah operasi renameat
 void io_renameat_cleanup(struct io_kiocb *req)
 {
 	struct io_rename *ren = io_kiocb_to_cmd(req, struct io_rename);
@@ -101,11 +113,13 @@ void io_renameat_cleanup(struct io_kiocb *req)
 	putname(ren->newpath);
 }
 
+// Fungsi untuk menyiapkan operasi unlinkat
 int io_unlinkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 {
 	struct io_unlink *un = io_kiocb_to_cmd(req, struct io_unlink);
 	const char __user *fname;
 
+	// Validasi argumen dari SQE
 	if (sqe->off || sqe->len || sqe->buf_index || sqe->splice_fd_in)
 		return -EINVAL;
 	if (unlikely(req->flags & REQ_F_FIXED_FILE))
@@ -113,6 +127,7 @@ int io_unlinkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 
 	un->dfd = READ_ONCE(sqe->fd);
 
+	// Validasi flag unlink
 	un->flags = READ_ONCE(sqe->unlink_flags);
 	if (un->flags & ~AT_REMOVEDIR)
 		return -EINVAL;
@@ -127,13 +142,16 @@ int io_unlinkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	return 0;
 }
 
+// Fungsi untuk melakukan operasi unlinkat
 int io_unlinkat(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_unlink *un = io_kiocb_to_cmd(req, struct io_unlink);
 	int ret;
 
+	// Cek flag non-blocking
 	WARN_ON_ONCE(issue_flags & IO_URING_F_NONBLOCK);
 
+	// Lakukan operasi unlinkat atau rmdir
 	if (un->flags & AT_REMOVEDIR)
 		ret = do_rmdir(un->dfd, un->filename);
 	else
@@ -144,6 +162,7 @@ int io_unlinkat(struct io_kiocb *req, unsigned int issue_flags)
 	return IOU_OK;
 }
 
+// Fungsi untuk membersihkan setelah operasi unlinkat
 void io_unlinkat_cleanup(struct io_kiocb *req)
 {
 	struct io_unlink *ul = io_kiocb_to_cmd(req, struct io_unlink);
@@ -151,11 +170,13 @@ void io_unlinkat_cleanup(struct io_kiocb *req)
 	putname(ul->filename);
 }
 
+// Fungsi untuk menyiapkan operasi mkdirat
 int io_mkdirat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 {
 	struct io_mkdir *mkd = io_kiocb_to_cmd(req, struct io_mkdir);
 	const char __user *fname;
 
+	// Validasi argumen dari SQE
 	if (sqe->off || sqe->rw_flags || sqe->buf_index || sqe->splice_fd_in)
 		return -EINVAL;
 	if (unlikely(req->flags & REQ_F_FIXED_FILE))
@@ -174,13 +195,16 @@ int io_mkdirat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	return 0;
 }
 
+// Fungsi untuk melakukan operasi mkdirat
 int io_mkdirat(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_mkdir *mkd = io_kiocb_to_cmd(req, struct io_mkdir);
 	int ret;
 
+	// Cek flag non-blocking
 	WARN_ON_ONCE(issue_flags & IO_URING_F_NONBLOCK);
 
+	// Lakukan operasi mkdirat
 	ret = do_mkdirat(mkd->dfd, mkd->filename, mkd->mode);
 
 	req->flags &= ~REQ_F_NEED_CLEANUP;
@@ -188,6 +212,7 @@ int io_mkdirat(struct io_kiocb *req, unsigned int issue_flags)
 	return IOU_OK;
 }
 
+// Fungsi untuk membersihkan setelah operasi mkdirat
 void io_mkdirat_cleanup(struct io_kiocb *req)
 {
 	struct io_mkdir *md = io_kiocb_to_cmd(req, struct io_mkdir);
@@ -195,11 +220,13 @@ void io_mkdirat_cleanup(struct io_kiocb *req)
 	putname(md->filename);
 }
 
+// Fungsi untuk menyiapkan operasi symlinkat
 int io_symlinkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 {
 	struct io_link *sl = io_kiocb_to_cmd(req, struct io_link);
 	const char __user *oldpath, *newpath;
 
+	// Validasi argumen dari SQE
 	if (sqe->len || sqe->rw_flags || sqe->buf_index || sqe->splice_fd_in)
 		return -EINVAL;
 	if (unlikely(req->flags & REQ_F_FIXED_FILE))
@@ -224,11 +251,13 @@ int io_symlinkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	return 0;
 }
 
+// Fungsi untuk melakukan operasi symlinkat
 int io_symlinkat(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_link *sl = io_kiocb_to_cmd(req, struct io_link);
 	int ret;
 
+	// Cek flag non-blocking
 	WARN_ON_ONCE(issue_flags & IO_URING_F_NONBLOCK);
 
 	ret = do_symlinkat(sl->oldpath, sl->new_dfd, sl->newpath);
@@ -238,11 +267,13 @@ int io_symlinkat(struct io_kiocb *req, unsigned int issue_flags)
 	return IOU_OK;
 }
 
+// Fungsi untuk menyiapkan operasi linkat
 int io_linkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 {
 	struct io_link *lnk = io_kiocb_to_cmd(req, struct io_link);
 	const char __user *oldf, *newf;
 
+	// Validasi argumen dari SQE
 	if (sqe->buf_index || sqe->splice_fd_in)
 		return -EINVAL;
 	if (unlikely(req->flags & REQ_F_FIXED_FILE))
@@ -269,11 +300,13 @@ int io_linkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	return 0;
 }
 
+// Fungsi untuk melakukan operasi linkat
 int io_linkat(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_link *lnk = io_kiocb_to_cmd(req, struct io_link);
 	int ret;
 
+	// Cek flag non-blocking
 	WARN_ON_ONCE(issue_flags & IO_URING_F_NONBLOCK);
 
 	ret = do_linkat(lnk->old_dfd, lnk->oldpath, lnk->new_dfd,
@@ -284,6 +317,7 @@ int io_linkat(struct io_kiocb *req, unsigned int issue_flags)
 	return IOU_OK;
 }
 
+// Fungsi untuk membersihkan setelah operasi linkat
 void io_link_cleanup(struct io_kiocb *req)
 {
 	struct io_link *sl = io_kiocb_to_cmd(req, struct io_link);
@@ -291,3 +325,4 @@ void io_link_cleanup(struct io_kiocb *req)
 	putname(sl->oldpath);
 	putname(sl->newpath);
 }
+

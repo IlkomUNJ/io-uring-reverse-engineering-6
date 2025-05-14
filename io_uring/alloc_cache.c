@@ -2,6 +2,11 @@
 
 #include "alloc_cache.h"
 
+/*
+ * Membebaskan seluruh entri cache alokasi yang tersisa.
+ * Fungsi ini akan mengambil setiap entri dari cache dan memanggil fungsi free()
+ * untuk masing-masingnya, lalu membebaskan memori array cache itu sendiri.
+ */
 void io_alloc_cache_free(struct io_alloc_cache *cache,
 			 void (*free)(const void *))
 {
@@ -17,7 +22,12 @@ void io_alloc_cache_free(struct io_alloc_cache *cache,
 	cache->entries = NULL;
 }
 
-/* returns false if the cache was initialized properly */
+/*
+ * Menginisialisasi struktur cache alokasi memori.
+ * Fungsi ini mengalokasikan array untuk menyimpan pointer entri cache.
+ * Jika berhasil, akan menyimpan parameter ukuran dan inisialisasi.
+ * Mengembalikan false jika berhasil, true jika alokasi gagal.
+ */
 bool io_alloc_cache_init(struct io_alloc_cache *cache,
 			 unsigned max_nr, unsigned int size,
 			 unsigned int init_bytes)
@@ -33,6 +43,11 @@ bool io_alloc_cache_init(struct io_alloc_cache *cache,
 	return false;
 }
 
+/*
+ * Mengalokasikan objek baru dengan ukuran yang telah ditentukan di cache.
+ * Jika parameter init_clear diset, maka objek akan diinisialisasi dengan nol.
+ * Objek dialokasikan menggunakan kmalloc dan dikembalikan ke pemanggil.
+ */
 void *io_cache_alloc_new(struct io_alloc_cache *cache, gfp_t gfp)
 {
 	void *obj;
@@ -42,3 +57,4 @@ void *io_cache_alloc_new(struct io_alloc_cache *cache, gfp_t gfp)
 		memset(obj, 0, cache->init_clear);
 	return obj;
 }
+

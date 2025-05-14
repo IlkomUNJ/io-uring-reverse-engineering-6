@@ -16,6 +16,7 @@
 #include "rsrc.h"
 
 #ifdef CONFIG_PROC_FS
+// Menampilkan kredensial pengguna yang terkait dengan io_uring
 static __cold int io_uring_show_cred(struct seq_file *m, unsigned int id,
 		const struct cred *cred)
 {
@@ -46,6 +47,7 @@ static __cold int io_uring_show_cred(struct seq_file *m, unsigned int id,
 	return 0;
 }
 
+// Menampilkan status tracking NAPI (New API)
 #ifdef CONFIG_NET_RX_BUSY_POLL
 static __cold void common_tracking_show_fdinfo(struct io_ring_ctx *ctx,
 					       struct seq_file *m,
@@ -60,11 +62,13 @@ static __cold void common_tracking_show_fdinfo(struct io_ring_ctx *ctx,
 		seq_puts(m, "napi_prefer_busy_poll:\tfalse\n");
 }
 
+// Menampilkan informasi lebih rinci terkait tracking NAPI
 static __cold void napi_show_fdinfo(struct io_ring_ctx *ctx,
 				    struct seq_file *m)
 {
 	unsigned int mode = READ_ONCE(ctx->napi_track_mode);
 
+	// Menampilkan mode NAPI sesuai statusnya
 	switch (mode) {
 	case IO_URING_NAPI_TRACKING_INACTIVE:
 		seq_puts(m, "NAPI:\tdisabled\n");
@@ -80,6 +84,7 @@ static __cold void napi_show_fdinfo(struct io_ring_ctx *ctx,
 	}
 }
 #else
+// Jika NAPI tidak diaktifkan, fungsi ini hanya melakukan inline kosong
 static inline void napi_show_fdinfo(struct io_ring_ctx *ctx,
 				    struct seq_file *m)
 {
@@ -87,8 +92,8 @@ static inline void napi_show_fdinfo(struct io_ring_ctx *ctx,
 #endif
 
 /*
- * Caller holds a reference to the file already, we don't need to do
- * anything else to get an extra reference.
+ * Menampilkan informasi terkait fd yang digunakan oleh io_uring
+ * Pemanggil sudah memegang referensi file, jadi tidak perlu menambah referensi lagi
  */
 __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 {
@@ -109,17 +114,13 @@ __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 	bool has_lock;
 	unsigned int i;
 
+	// Menentukan apakah menggunakan CQE 32-bit atau SQE 128-bit
 	if (ctx->flags & IORING_SETUP_CQE32)
 		cq_shift = 1;
 	if (ctx->flags & IORING_SETUP_SQE128)
 		sq_shift = 1;
 
-	/*
-	 * we may get imprecise sqe and cqe info if uring is actively running
-	 * since we get cached_sq_head and cached_cq_tail without uring_lock
-	 * and sq_tail and cq_head are changed by userspace. But it's ok since
-	 * we usually use these info when it is stuck.
-	 */
+	// Menampilkan status antrian SQ dan CQ
 	seq_printf(m, "SqMask:\t0x%x\n", sq_mask);
 	seq_printf(m, "SqHead:\t%u\n", sq_head);
 	seq_printf(m, "SqTail:\t%u\n", sq_tail);
@@ -129,6 +130,8 @@ __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 	seq_printf(m, "CqTail:\t%u\n", cq_tail);
 	seq_printf(m, "CachedCqTail:\t%u\n", ctx->cached_cq_tail);
 	seq_printf(m, "SQEs:\t%u\n", sq_tail - sq_head);
+
+	// Menampilkan informasi tentang SQE yang sedang diproses
 	sq_entries = min(sq_tail - sq_head, ctx->sq_entries);
 	for (i = 0; i < sq_entries; i++) {
 		unsigned int entry = i + sq_head;
@@ -161,6 +164,8 @@ __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 		}
 		seq_printf(m, "\n");
 	}
+
+	// Menampilkan informasi tentang CQE yang telah selesai
 	seq_printf(m, "CQEs:\t%u\n", cq_tail - cq_head);
 	cq_entries = min(cq_tail - cq_head, ctx->cq_entries);
 	for (i = 0; i < cq_entries; i++) {
@@ -176,21 +181,13 @@ __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 		seq_printf(m, "\n");
 	}
 
-	/*
-	 * Avoid ABBA deadlock between the seq lock and the io_uring mutex,
-	 * since fdinfo case grabs it in the opposite direction of normal use
-	 * cases. If we fail to get the lock, we just don't iterate any
-	 * structures that could be going away outside the io_uring mutex.
-	 */
+	// Cek apakah kita bisa mendapatkan kunci untuk mengakses data yang dilindungi
 	has_lock = mutex_trylock(&ctx->uring_lock);
 
 	if (has_lock && (ctx->flags & IORING_SETUP_SQPOLL)) {
 		struct io_sq_data *sq = ctx->sq_data;
 
-		/*
-		 * sq->thread might be NULL if we raced with the sqpoll
-		 * thread termination.
-		 */
+		// Mengambil informasi dari thread SQ polling jika tersedia
 		if (sq->thread) {
 			sq_pid = sq->task_pid;
 			sq_cpu = sq->sq_cpu;
@@ -201,10 +198,13 @@ __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 		}
 	}
 
+	// Menampilkan status thread SQ
 	seq_printf(m, "SqThread:\t%d\n", sq_pid);
 	seq_printf(m, "SqThreadCpu:\t%d\n", sq_cpu);
 	seq_printf(m, "SqTotalTime:\t%llu\n", sq_total_time);
 	seq_printf(m, "SqWorkTime:\t%llu\n", sq_work_time);
+
+	// Menampilkan informasi tentang file yang digunakan oleh io_uring
 	seq_printf(m, "UserFiles:\t%u\n", ctx->file_table.data.nr);
 	for (i = 0; has_lock && i < ctx->file_table.data.nr; i++) {
 		struct file *f = NULL;
@@ -217,6 +217,8 @@ __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 			seq_puts(m, "\n");
 		}
 	}
+
+	// Menampilkan informasi tentang buffer yang terdaftar di io_uring
 	seq_printf(m, "UserBufs:\t%u\n", ctx->buf_table.nr);
 	for (i = 0; has_lock && i < ctx->buf_table.nr; i++) {
 		struct io_mapped_ubuf *buf = NULL;
@@ -228,6 +230,8 @@ __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 		else
 			seq_printf(m, "%5u: <none>\n", i);
 	}
+
+	// Menampilkan informasi terkait personalities jika ada
 	if (has_lock && !xa_empty(&ctx->personalities)) {
 		unsigned long index;
 		const struct cred *cred;
@@ -237,6 +241,7 @@ __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 			io_uring_show_cred(m, index, cred);
 	}
 
+	// Menampilkan status antrian pembatalan
 	seq_puts(m, "PollList:\n");
 	for (i = 0; has_lock && i < (1U << ctx->cancel_table.hash_bits); i++) {
 		struct io_hash_bucket *hb = &ctx->cancel_table.hbs[i];
@@ -247,9 +252,11 @@ __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 					task_work_pending(req->tctx->task));
 	}
 
+	// Melepas mutex jika sebelumnya berhasil mendapatkan kunci
 	if (has_lock)
 		mutex_unlock(&ctx->uring_lock);
 
+	// Menampilkan informasi tentang daftar overflow CQE
 	seq_puts(m, "CqOverflowList:\n");
 	spin_lock(&ctx->completion_lock);
 	list_for_each_entry(ocqe, &ctx->cq_overflow_list, list) {
@@ -260,6 +267,9 @@ __cold void io_uring_show_fdinfo(struct seq_file *m, struct file *file)
 
 	}
 	spin_unlock(&ctx->completion_lock);
+
+	// Menampilkan informasi NAPI jika ada
 	napi_show_fdinfo(ctx, m);
 }
 #endif
+

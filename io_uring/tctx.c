@@ -12,6 +12,16 @@
 #include "io_uring.h"
 #include "tctx.h"
 
+/*
+ * io_init_wq_offload - Inisialisasi workqueue khusus untuk offload io_uring
+ * @ctx: Context io_uring
+ * @task: Task yang terkait dengan context ini
+ *
+ * Jika hash_map workqueue belum tersedia, alokasikan dan inisialisasi.
+ * Kemudian buat workqueue berdasarkan SQE entry dan jumlah CPU online.
+ *
+ * Return: Pointer ke workqueue jika sukses, atau ERR_PTR jika gagal.
+ */
 static struct io_wq *io_init_wq_offload(struct io_ring_ctx *ctx,
 					struct task_struct *task)
 {
@@ -38,24 +48,27 @@ static struct io_wq *io_init_wq_offload(struct io_ring_ctx *ctx,
 	data.free_work = io_wq_free_work;
 	data.do_work = io_wq_submit_work;
 
-	/* Do QD, or 4 * CPUS, whatever is smallest */
+	/* Gunakan minimum antara SQE entry dan 4 * jumlah CPU */
 	concurrency = min(ctx->sq_entries, 4 * num_online_cpus());
 
 	return io_wq_create(concurrency, &data);
 }
 
+/*
+ * __io_uring_free - Membersihkan context io_uring dari task
+ * @tsk: Task struct dari proses yang akan dibersihkan
+ *
+ * Fungsi ini membersihkan dan membebaskan io_uring_task dari task yang
+ * dipanggil. Memastikan tidak ada node tersisa di xarray dan workqueue
+ * telah di-nil-kan.
+ */
 void __io_uring_free(struct task_struct *tsk)
 {
 	struct io_uring_task *tctx = tsk->io_uring;
 	struct io_tctx_node *node;
 	unsigned long index;
 
-	/*
-	 * Fault injection forcing allocation errors in the xa_store() path
-	 * can lead to xa_empty() returning false, even though no actual
-	 * node is stored in the xarray. Until that gets sorted out, attempt
-	 * an iteration here and warn if any entries are found.
-	 */
+	/* Validasi jika ada sisa node di xarray (error jika ada) */
 	xa_for_each(&tctx->xa, index, node) {
 		WARN_ON_ONCE(1);
 		break;
@@ -68,6 +81,16 @@ void __io_uring_free(struct task_struct *tsk)
 	tsk->io_uring = NULL;
 }
 
+/*
+ * io_uring_alloc_task_context - Mengalokasikan context task untuk io_uring
+ * @task: Task struct untuk proses saat ini
+ * @ctx: Context io_uring yang akan dihubungkan
+ *
+ * Alokasikan dan inisialisasi struktur io_uring_task untuk task.
+ * Membangun workqueue dan inisialisasi struktur lainnya.
+ *
+ * Return: 0 jika berhasil, atau error code jika gagal.
+ */
 __cold int io_uring_alloc_task_context(struct task_struct *task,
 				       struct io_ring_ctx *ctx)
 {
@@ -103,6 +126,15 @@ __cold int io_uring_alloc_task_context(struct task_struct *task,
 	return 0;
 }
 
+/*
+ * __io_uring_add_tctx_node - Tambahkan task context node ke context io_uring
+ * @ctx: Context io_uring
+ *
+ * Fungsi ini menghubungkan task (current) ke context io_uring tertentu.
+ * Jika belum ada tctx, maka akan dialokasikan.
+ *
+ * Return: 0 jika berhasil, atau error code jika gagal.
+ */
 int __io_uring_add_tctx_node(struct io_ring_ctx *ctx)
 {
 	struct io_uring_task *tctx = current->io_uring;
@@ -145,6 +177,15 @@ int __io_uring_add_tctx_node(struct io_ring_ctx *ctx)
 	return 0;
 }
 
+/*
+ * __io_uring_add_tctx_node_from_submit - Tambahkan tctx node saat submit SQE
+ * @ctx: Context io_uring
+ *
+ * Memastikan bahwa task saat ini sesuai dengan SINGLE_ISSUER (jika aktif),
+ * lalu tambahkan node dari submitter task.
+ *
+ * Return: 0 jika sukses, atau error code jika gagal.
+ */
 int __io_uring_add_tctx_node_from_submit(struct io_ring_ctx *ctx)
 {
 	int ret;
@@ -162,7 +203,11 @@ int __io_uring_add_tctx_node_from_submit(struct io_ring_ctx *ctx)
 }
 
 /*
- * Remove this io_uring_file -> task mapping.
+ * io_uring_del_tctx_node - Menghapus hubungan antara task dan io_uring ctx
+ * @index: Index context dalam xarray tctx
+ *
+ * Melepas node yang merepresentasikan hubungan task dengan context tertentu.
+ * Ini dilakukan saat context tidak lagi digunakan oleh task tersebut.
  */
 __cold void io_uring_del_tctx_node(unsigned long index)
 {
@@ -187,6 +232,14 @@ __cold void io_uring_del_tctx_node(unsigned long index)
 	kfree(node);
 }
 
+/*
+ * io_uring_clean_tctx - Membersihkan seluruh node dan workqueue milik tctx
+ * @tctx: Pointer ke struktur io_uring_task milik task saat ini
+ *
+ * Menghapus semua io_tctx_node yang terdaftar di xarray dan
+ * melepaskan workqueue yang terkait. Dipanggil saat proses/thread
+ * keluar dan io_uring dibersihkan dari task-nya.
+ */
 __cold void io_uring_clean_tctx(struct io_uring_task *tctx)
 {
 	struct io_wq *wq = tctx->io_wq;
@@ -199,14 +252,20 @@ __cold void io_uring_clean_tctx(struct io_uring_task *tctx)
 	}
 	if (wq) {
 		/*
-		 * Must be after io_uring_del_tctx_node() (removes nodes under
-		 * uring_lock) to avoid race with io_uring_try_cancel_iowq().
+		 * Harus dipanggil setelah io_uring_del_tctx_node()
+		 * untuk menghindari race dengan io_uring_try_cancel_iowq().
 		 */
 		io_wq_put_and_exit(wq);
 		tctx->io_wq = NULL;
 	}
 }
 
+/*
+ * io_uring_unreg_ringfd - Menghapus semua ring file descriptor yang terdaftar
+ *
+ * Membersihkan dan melepaskan referensi ke semua file descriptor
+ * yang terdaftar sebagai ringfd dalam io_uring_task.
+ */
 void io_uring_unreg_ringfd(void)
 {
 	struct io_uring_task *tctx = current->io_uring;
@@ -220,6 +279,18 @@ void io_uring_unreg_ringfd(void)
 	}
 }
 
+/*
+ * io_ring_add_registered_file - Menambahkan file ke slot ringfd yang kosong
+ * @tctx: io_uring_task milik task saat ini
+ * @file: File pointer yang ingin didaftarkan
+ * @start: Indeks awal pencarian slot kosong
+ * @end: Indeks akhir pencarian slot kosong
+ *
+ * Mencari slot kosong di array registered_rings dan menyimpan
+ * referensi file ke sana.
+ *
+ * Return: Offset slot jika berhasil, atau -EBUSY jika semua slot penuh.
+ */
 int io_ring_add_registered_file(struct io_uring_task *tctx, struct file *file,
 				     int start, int end)
 {
@@ -235,6 +306,17 @@ int io_ring_add_registered_file(struct io_uring_task *tctx, struct file *file,
 	return -EBUSY;
 }
 
+/*
+ * io_ring_add_registered_fd - Ambil file dari fd dan daftarkan sebagai ringfd
+ * @tctx: io_uring_task milik task saat ini
+ * @fd: File descriptor user yang ingin didaftarkan
+ * @start: Indeks awal pencarian slot kosong
+ * @end: Indeks akhir pencarian slot kosong
+ *
+ * Validasi file descriptor, ambil file, dan simpan di array registered_rings.
+ *
+ * Return: Offset slot jika sukses, atau kode error jika gagal.
+ */
 static int io_ring_add_registered_fd(struct io_uring_task *tctx, int fd,
 				     int start, int end)
 {
@@ -255,12 +337,16 @@ static int io_ring_add_registered_fd(struct io_uring_task *tctx, int fd,
 }
 
 /*
- * Register a ring fd to avoid fdget/fdput for each io_uring_enter()
- * invocation. User passes in an array of struct io_uring_rsrc_update
- * with ->data set to the ring_fd, and ->offset given for the desired
- * index. If no index is desired, application may set ->offset == -1U
- * and we'll find an available index. Returns number of entries
- * successfully processed, or < 0 on error if none were processed.
+ * io_ringfd_register - Mendaftarkan file descriptor io_uring ke ringfd slot
+ * @ctx: Context io_uring yang aktif
+ * @__arg: Pointer user ke array io_uring_rsrc_update
+ * @nr_args: Jumlah entry yang akan didaftarkan
+ *
+ * Fungsi ini memungkinkan aplikasi mendaftarkan io_uring milik thread lain
+ * agar tidak perlu melakukan fdget/fdput setiap kali pemanggilan
+ * io_uring_enter(). Jika offset == -1U, maka akan mencari slot kosong otomatis.
+ *
+ * Return: Jumlah entry yang sukses didaftarkan, atau kode error jika gagal.
  */
 int io_ringfd_register(struct io_ring_ctx *ctx, void __user *__arg,
 		       unsigned nr_args)
@@ -321,6 +407,17 @@ int io_ringfd_register(struct io_ring_ctx *ctx, void __user *__arg,
 	return i ? i : ret;
 }
 
+/*
+ * io_ringfd_unregister - Menghapus ringfd yang sebelumnya terdaftar
+ * @ctx: Context io_uring yang aktif
+ * @__arg: Pointer user ke array io_uring_rsrc_update
+ * @nr_args: Jumlah entry yang akan dihapus
+ *
+ * Fungsi ini menghapus file descriptor dari array registered_rings
+ * berdasarkan indeks yang diberikan oleh user.
+ *
+ * Return: Jumlah entry yang berhasil dihapus, atau error jika tidak ada.
+ */
 int io_ringfd_unregister(struct io_ring_ctx *ctx, void __user *__arg,
 			 unsigned nr_args)
 {
@@ -353,3 +450,4 @@ int io_ringfd_unregister(struct io_ring_ctx *ctx, void __user *__arg,
 
 	return i ? i : ret;
 }
+

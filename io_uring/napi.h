@@ -9,22 +9,34 @@
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 
+/* Menginisialisasi dukungan NAPI pada context io_uring. */
 void io_napi_init(struct io_ring_ctx *ctx);
+
+/* Membebaskan resource yang berkaitan dengan NAPI dalam context. */
 void io_napi_free(struct io_ring_ctx *ctx);
 
+/* Mendaftarkan NAPI ID dari userspace ke context io_uring. */
 int io_register_napi(struct io_ring_ctx *ctx, void __user *arg);
+
+/* Menghapus registrasi NAPI ID dari context io_uring. */
 int io_unregister_napi(struct io_ring_ctx *ctx, void __user *arg);
 
+/* Menambahkan NAPI ID ke context dari kernel (digunakan internal). */
 int __io_napi_add_id(struct io_ring_ctx *ctx, unsigned int napi_id);
 
+/* Melakukan busy-polling menggunakan NAPI pada context tertentu. */
 void __io_napi_busy_loop(struct io_ring_ctx *ctx, struct io_wait_queue *iowq);
+
+/* Melakukan busy-polling saat SQPOLL aktif dan NAPI digunakan. */
 int io_napi_sqpoll_busy_poll(struct io_ring_ctx *ctx);
 
+/* Mengecek apakah context memiliki entri NAPI terdaftar. */
 static inline bool io_napi(struct io_ring_ctx *ctx)
 {
 	return !list_empty(&ctx->napi_list);
 }
 
+/* Wrapper untuk __io_napi_busy_loop jika context memiliki NAPI. */
 static inline void io_napi_busy_loop(struct io_ring_ctx *ctx,
 				     struct io_wait_queue *iowq)
 {
@@ -34,10 +46,11 @@ static inline void io_napi_busy_loop(struct io_ring_ctx *ctx,
 }
 
 /*
- * io_napi_add() - Add napi id to the busy poll list
- * @req: pointer to io_kiocb request
+ * io_napi_add() - Menambahkan NAPI ID dari request ke daftar polling
+ * @req: pointer ke permintaan io_kiocb
  *
- * Add the napi id of the socket to the napi busy poll list and hash table.
+ * Jika mode pelacakan NAPI adalah dinamis, maka NAPI ID dari socket
+ * akan diambil dan dimasukkan ke dalam daftar NAPI pada context.
  */
 static inline void io_napi_add(struct io_kiocb *req)
 {
@@ -52,37 +65,45 @@ static inline void io_napi_add(struct io_kiocb *req)
 		__io_napi_add_id(ctx, READ_ONCE(sock->sk->sk_napi_id));
 }
 
-#else
+#else /* CONFIG_NET_RX_BUSY_POLL not defined */
 
-static inline void io_napi_init(struct io_ring_ctx *ctx)
-{
-}
-static inline void io_napi_free(struct io_ring_ctx *ctx)
-{
-}
+/* Stub kosong jika NAPI tidak didukung. */
+static inline void io_napi_init(struct io_ring_ctx *ctx) { }
+
+/* Stub kosong jika NAPI tidak didukung. */
+static inline void io_napi_free(struct io_ring_ctx *ctx) { }
+
+/* Return error karena tidak didukung. */
 static inline int io_register_napi(struct io_ring_ctx *ctx, void __user *arg)
 {
 	return -EOPNOTSUPP;
 }
+
+/* Return error karena tidak didukung. */
 static inline int io_unregister_napi(struct io_ring_ctx *ctx, void __user *arg)
 {
 	return -EOPNOTSUPP;
 }
+
+/* Return false karena tidak ada dukungan NAPI. */
 static inline bool io_napi(struct io_ring_ctx *ctx)
 {
 	return false;
 }
-static inline void io_napi_add(struct io_kiocb *req)
-{
-}
+
+/* Stub kosong jika NAPI tidak didukung. */
+static inline void io_napi_add(struct io_kiocb *req) { }
+
+/* Stub kosong jika NAPI tidak didukung. */
 static inline void io_napi_busy_loop(struct io_ring_ctx *ctx,
-				     struct io_wait_queue *iowq)
-{
-}
+				     struct io_wait_queue *iowq) { }
+
+/* Return 0 karena tidak ada polling NAPI yang dijalankan. */
 static inline int io_napi_sqpoll_busy_poll(struct io_ring_ctx *ctx)
 {
 	return 0;
 }
 #endif /* CONFIG_NET_RX_BUSY_POLL */
 
-#endif
+#endif /* IOU_NAPI_H */
+

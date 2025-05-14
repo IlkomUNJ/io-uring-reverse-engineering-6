@@ -18,6 +18,10 @@
 #define IORING_MSG_RING_MASK		(IORING_MSG_RING_CQE_SKIP | \
 					IORING_MSG_RING_FLAGS_PASS)
 
+/* 
+ * struct io_msg - Struktur data yang digunakan untuk menyimpan informasi terkait
+ * pesan yang diproses dalam io_uring, seperti file sumber, file tujuan, dan data terkait.
+ */
 struct io_msg {
 	struct file			*file;
 	struct file			*src_file;
@@ -33,19 +37,22 @@ struct io_msg {
 	u32 flags;
 };
 
+/* 
+ * io_double_unlock_ctx - Melepaskan kunci yang dipakai untuk mengunci konteks
+ * uring yang ditentukan.
+ */
 static void io_double_unlock_ctx(struct io_ring_ctx *octx)
 {
 	mutex_unlock(&octx->uring_lock);
 }
 
+/* 
+ * io_lock_external_ctx - Mengunci konteks eksternal dengan memperhatikan urutan
+ * yang benar antara konteks yang terlibat. Jika tidak bisa mengunci, maka mengembalikan -EAGAIN.
+ */
 static int io_lock_external_ctx(struct io_ring_ctx *octx,
 				unsigned int issue_flags)
 {
-	/*
-	 * To ensure proper ordering between the two ctxs, we can only
-	 * attempt a trylock on the target. If that fails and we already have
-	 * the source ctx lock, punt to io-wq.
-	 */
 	if (!(issue_flags & IO_URING_F_UNLOCKED)) {
 		if (!mutex_trylock(&octx->uring_lock))
 			return -EAGAIN;
@@ -55,6 +62,10 @@ static int io_lock_external_ctx(struct io_ring_ctx *octx,
 	return 0;
 }
 
+/* 
+ * io_msg_ring_cleanup - Membersihkan sumber daya yang terkait dengan pesan
+ * setelah selesai diproses. Menutup file sumber jika ada.
+ */
 void io_msg_ring_cleanup(struct io_kiocb *req)
 {
 	struct io_msg *msg = io_kiocb_to_cmd(req, struct io_msg);
@@ -66,11 +77,19 @@ void io_msg_ring_cleanup(struct io_kiocb *req)
 	msg->src_file = NULL;
 }
 
+/* 
+ * io_msg_need_remote - Memeriksa apakah pesan perlu diproses di konteks target yang
+ * berbeda, tergantung pada apakah tugas selesai.
+ */
 static inline bool io_msg_need_remote(struct io_ring_ctx *target_ctx)
 {
 	return target_ctx->task_complete;
 }
 
+/* 
+ * io_msg_tw_complete - Menangani penyelesaian tugas untuk pesan, mengirimkan
+ * hasil tugas kembali ke konteks dan membersihkan sumber daya.
+ */
 static void io_msg_tw_complete(struct io_kiocb *req, io_tw_token_t tw)
 {
 	struct io_ring_ctx *ctx = req->ctx;
@@ -86,6 +105,10 @@ static void io_msg_tw_complete(struct io_kiocb *req, io_tw_token_t tw)
 	percpu_ref_put(&ctx->refs);
 }
 
+/* 
+ * io_msg_remote_post - Menyampaikan pesan untuk diproses secara remote jika konteks
+ * pengirim tidak ada, mengembalikan -EOWNERDEAD jika gagal.
+ */
 static int io_msg_remote_post(struct io_ring_ctx *ctx, struct io_kiocb *req,
 			      int res, u32 cflags, u64 user_data)
 {
@@ -104,6 +127,10 @@ static int io_msg_remote_post(struct io_ring_ctx *ctx, struct io_kiocb *req,
 	return 0;
 }
 
+/* 
+ * io_msg_get_kiocb - Mendapatkan objek kiocb untuk pesan, mengambilnya dari cache atau
+ * mengalokasikan yang baru jika cache kosong.
+ */
 static struct io_kiocb *io_msg_get_kiocb(struct io_ring_ctx *ctx)
 {
 	struct io_kiocb *req = NULL;
@@ -117,6 +144,9 @@ static struct io_kiocb *io_msg_get_kiocb(struct io_ring_ctx *ctx)
 	return kmem_cache_alloc(req_cachep, GFP_KERNEL | __GFP_NOWARN | __GFP_ZERO);
 }
 
+/* 
+ * io_msg_data_remote - Mengirimkan data pesan ke konteks target untuk diproses secara remote.
+ */
 static int io_msg_data_remote(struct io_ring_ctx *target_ctx,
 			      struct io_msg *msg)
 {
@@ -134,6 +164,10 @@ static int io_msg_data_remote(struct io_ring_ctx *target_ctx,
 					msg->user_data);
 }
 
+/* 
+ * __io_msg_ring_data - Menangani pemrosesan data dari pesan, memvalidasi dan
+ * memutuskan apakah harus diproses secara lokal atau remote.
+ */
 static int __io_msg_ring_data(struct io_ring_ctx *target_ctx,
 			      struct io_msg *msg, unsigned int issue_flags)
 {
@@ -165,6 +199,9 @@ static int __io_msg_ring_data(struct io_ring_ctx *target_ctx,
 	return ret;
 }
 
+/* 
+ * io_msg_ring_data - Fungsi utama yang memproses data pesan untuk io_uring.
+ */
 static int io_msg_ring_data(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_ring_ctx *target_ctx = req->file->private_data;
@@ -173,6 +210,10 @@ static int io_msg_ring_data(struct io_kiocb *req, unsigned int issue_flags)
 	return __io_msg_ring_data(target_ctx, msg, issue_flags);
 }
 
+/* 
+ * io_msg_grab_file - Mengambil file sumber berdasarkan file descriptor yang diberikan
+ * dalam pesan. Jika file tidak ditemukan, mengembalikan -EBADF.
+ */
 static int io_msg_grab_file(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_msg *msg = io_kiocb_to_cmd(req, struct io_msg);
@@ -193,6 +234,10 @@ static int io_msg_grab_file(struct io_kiocb *req, unsigned int issue_flags)
 	return ret;
 }
 
+/* 
+ * io_msg_install_complete - Menangani penyelesaian instalasi file dalam konteks
+ * target dan mengirimkan hasilnya sebagai Completion Queue Entry (CQE).
+ */
 static int io_msg_install_complete(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_ring_ctx *target_ctx = req->file->private_data;
@@ -212,12 +257,7 @@ static int io_msg_install_complete(struct io_kiocb *req, unsigned int issue_flag
 
 	if (msg->flags & IORING_MSG_RING_CQE_SKIP)
 		goto out_unlock;
-	/*
-	 * If this fails, the target still received the file descriptor but
-	 * wasn't notified of the fact. This means that if this request
-	 * completes with -EOVERFLOW, then the sender must ensure that a
-	 * later IORING_OP_MSG_RING delivers the message.
-	 */
+
 	if (!io_post_aux_cqe(target_ctx, msg->user_data, ret, 0))
 		ret = -EOVERFLOW;
 out_unlock:
@@ -225,6 +265,10 @@ out_unlock:
 	return ret;
 }
 
+/* 
+ * io_msg_tw_fd_complete - Menyelesaikan tugas kerja (task work) terkait pengelolaan
+ * file descriptor untuk pesan, menangani kegagalan jika diperlukan.
+ */
 static void io_msg_tw_fd_complete(struct callback_head *head)
 {
 	struct io_msg *msg = container_of(head, struct io_msg, tw);
@@ -238,6 +282,10 @@ static void io_msg_tw_fd_complete(struct callback_head *head)
 	io_req_queue_tw_complete(req, ret);
 }
 
+/* 
+ * io_msg_fd_remote - Menangani pengiriman file descriptor untuk pengolahan
+ * pesan secara remote.
+ */
 static int io_msg_fd_remote(struct io_kiocb *req)
 {
 	struct io_ring_ctx *ctx = req->file->private_data;
@@ -254,6 +302,10 @@ static int io_msg_fd_remote(struct io_kiocb *req)
 	return IOU_ISSUE_SKIP_COMPLETE;
 }
 
+/* 
+ * io_msg_send_fd - Menangani pengiriman file descriptor pada pesan yang dikirim
+ * melalui io_uring.
+ */
 static int io_msg_send_fd(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_ring_ctx *target_ctx = req->file->private_data;
@@ -277,6 +329,9 @@ static int io_msg_send_fd(struct io_kiocb *req, unsigned int issue_flags)
 	return io_msg_install_complete(req, issue_flags);
 }
 
+/* 
+ * __io_msg_ring_prep - Menyiapkan data untuk pesan dengan membaca dan memvalidasi
+ *
 static int __io_msg_ring_prep(struct io_msg *msg, const struct io_uring_sqe *sqe)
 {
 	if (unlikely(sqe->buf_index || sqe->personality))
@@ -333,25 +388,32 @@ done:
 
 int io_uring_sync_msg_ring(struct io_uring_sqe *sqe)
 {
-	struct io_msg io_msg = { };
-	int ret;
+    // Inisialisasi struktur io_msg untuk menampung data pesan
+    struct io_msg io_msg = { };
+    int ret;
 
-	ret = __io_msg_ring_prep(&io_msg, sqe);
-	if (unlikely(ret))
-		return ret;
+    // Mempersiapkan pesan dari SQE (Submission Queue Entry)
+    ret = __io_msg_ring_prep(&io_msg, sqe);
+    if (unlikely(ret)) // Jika terjadi error saat persiapan, langsung keluar dengan error
+        return ret;
 
-	/*
-	 * Only data sending supported, not IORING_MSG_SEND_FD as that one
-	 * doesn't make sense without a source ring to send files from.
-	 */
-	if (io_msg.cmd != IORING_MSG_DATA)
-		return -EINVAL;
+    /*
+     * Hanya perintah IORING_MSG_DATA yang didukung, bukan IORING_MSG_SEND_FD
+     * karena pengiriman file descriptor hanya masuk akal jika ada ring sumber
+     * untuk mengirim file descriptor.
+     */
+    if (io_msg.cmd != IORING_MSG_DATA)
+        return -EINVAL; // Jika perintah bukan IORING_MSG_DATA, return error invalid argument
 
-	CLASS(fd, f)(sqe->fd);
-	if (fd_empty(f))
-		return -EBADF;
-	if (!io_is_uring_fops(fd_file(f)))
-		return -EBADFD;
-	return  __io_msg_ring_data(fd_file(f)->private_data,
-				   &io_msg, IO_URING_F_UNLOCKED);
+    // Memeriksa apakah file descriptor yang diberikan dalam SQE valid
+    CLASS(fd, f)(sqe->fd); // Mengakses file descriptor dari SQE
+    if (fd_empty(f)) // Jika file descriptor kosong, return error bad file descriptor
+        return -EBADF;
+    if (!io_is_uring_fops(fd_file(f))) // Memeriksa apakah file descriptor terkait dengan io_uring fops
+        return -EBADFD; // Jika tidak, return error bad file descriptor
+
+    // Mengirimkan data melalui io_msg_ring_data ke target context yang sesuai
+    return __io_msg_ring_data(fd_file(f)->private_data,
+                               &io_msg, IO_URING_F_UNLOCKED); // Mengirim data dengan flag unlocked
 }
+

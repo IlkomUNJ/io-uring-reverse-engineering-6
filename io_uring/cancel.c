@@ -8,7 +8,6 @@
 #include <linux/namei.h>
 #include <linux/nospec.h>
 #include <linux/io_uring.h>
-
 #include <uapi/linux/io_uring.h>
 
 #include "io_uring.h"
@@ -19,20 +18,26 @@
 #include "futex.h"
 #include "cancel.h"
 
+/*
+ * Struktur data untuk menyimpan parameter pembatalan request async.
+ */
 struct io_cancel {
-	struct file			*file;
-	u64				addr;
-	u32				flags;
-	s32				fd;
-	u8				opcode;
+	struct file *file;
+	u64 addr;
+	u32 flags;
+	s32 fd;
+	u8 opcode;
 };
 
-#define CANCEL_FLAGS	(IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_FD | \
-			 IORING_ASYNC_CANCEL_ANY | IORING_ASYNC_CANCEL_FD_FIXED | \
-			 IORING_ASYNC_CANCEL_USERDATA | IORING_ASYNC_CANCEL_OP)
+/*
+ * Flag yang diizinkan untuk operasi pembatalan async.
+ */
+#define CANCEL_FLAGS (IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_FD | \
+		      IORING_ASYNC_CANCEL_ANY | IORING_ASYNC_CANCEL_FD_FIXED | \
+		      IORING_ASYNC_CANCEL_USERDATA | IORING_ASYNC_CANCEL_OP)
 
 /*
- * Returns true if the request matches the criteria outlined by 'cd'.
+ * Menentukan apakah request 'req' cocok dengan kriteria pembatalan dari 'cd'.
  */
 bool io_cancel_req_match(struct io_kiocb *req, struct io_cancel_data *cd)
 {
@@ -65,6 +70,9 @@ check_seq:
 	return true;
 }
 
+/*
+ * Callback untuk pembatalan pekerjaan async.
+ */
 static bool io_cancel_cb(struct io_wq_work *work, void *data)
 {
 	struct io_kiocb *req = container_of(work, struct io_kiocb, work);
@@ -73,6 +81,9 @@ static bool io_cancel_cb(struct io_wq_work *work, void *data)
 	return io_cancel_req_match(req, cd);
 }
 
+/*
+ * Mencoba membatalkan satu pekerjaan async melalui io-wq.
+ */
 static int io_async_cancel_one(struct io_uring_task *tctx,
 			       struct io_cancel_data *cd)
 {
@@ -83,7 +94,7 @@ static int io_async_cancel_one(struct io_uring_task *tctx,
 	if (!tctx || !tctx->io_wq)
 		return -ENOENT;
 
-	all = cd->flags & (IORING_ASYNC_CANCEL_ALL|IORING_ASYNC_CANCEL_ANY);
+	all = cd->flags & (IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY);
 	cancel_ret = io_wq_cancel_cb(tctx->io_wq, io_cancel_cb, cd, all);
 	switch (cancel_ret) {
 	case IO_WQ_CANCEL_OK:
@@ -100,6 +111,9 @@ static int io_async_cancel_one(struct io_uring_task *tctx,
 	return ret;
 }
 
+/*
+ * Fungsi utama untuk mencoba membatalkan request async yang cocok.
+ */
 int io_try_cancel(struct io_uring_task *tctx, struct io_cancel_data *cd,
 		  unsigned issue_flags)
 {
@@ -109,10 +123,6 @@ int io_try_cancel(struct io_uring_task *tctx, struct io_cancel_data *cd,
 	WARN_ON_ONCE(!io_wq_current_is_worker() && tctx != current->io_uring);
 
 	ret = io_async_cancel_one(tctx, cd);
-	/*
-	 * Fall-through even for -EALREADY, as we may have poll armed
-	 * that need unarming.
-	 */
 	if (!ret)
 		return 0;
 
@@ -135,6 +145,9 @@ int io_try_cancel(struct io_uring_task *tctx, struct io_cancel_data *cd,
 	return ret;
 }
 
+/*
+ * Persiapan data pembatalan dari SQE untuk async cancel.
+ */
 int io_async_cancel_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 {
 	struct io_cancel *cancel = io_kiocb_to_cmd(req, struct io_cancel);
@@ -162,6 +175,9 @@ int io_async_cancel_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	return 0;
 }
 
+/*
+ * Menjalankan pembatalan async terhadap request sesuai kriteria.
+ */
 static int __io_async_cancel(struct io_cancel_data *cd,
 			     struct io_uring_task *tctx,
 			     unsigned int issue_flags)
@@ -180,7 +196,6 @@ static int __io_async_cancel(struct io_cancel_data *cd,
 		nr++;
 	} while (1);
 
-	/* slow path, try all io-wq's */
 	io_ring_submit_lock(ctx, issue_flags);
 	ret = -ENOENT;
 	list_for_each_entry(node, &ctx->tctx_list, ctx_node) {
@@ -195,6 +210,9 @@ static int __io_async_cancel(struct io_cancel_data *cd,
 	return all ? nr : ret;
 }
 
+/*
+ * Handler untuk IORING_OP_ASYNC_CANCEL.
+ */
 int io_async_cancel(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_cancel *cancel = io_kiocb_to_cmd(req, struct io_cancel);
@@ -232,12 +250,14 @@ done:
 	return IOU_OK;
 }
 
+/*
+ * Sinkronisasi pembatalan request, digunakan oleh io_sync_cancel().
+ */
 static int __io_sync_cancel(struct io_uring_task *tctx,
 			    struct io_cancel_data *cd, int fd)
 {
 	struct io_ring_ctx *ctx = cd->ctx;
 
-	/* fixed must be grabbed every time since we drop the uring_lock */
 	if ((cd->flags & IORING_ASYNC_CANCEL_FD) &&
 	    (cd->flags & IORING_ASYNC_CANCEL_FD_FIXED)) {
 		struct io_rsrc_node *node;
@@ -253,6 +273,9 @@ static int __io_sync_cancel(struct io_uring_task *tctx,
 	return __io_async_cancel(cd, tctx, 0);
 }
 
+/*
+ * Handler untuk IORING_REGISTER_SYNC_CANCEL.
+ */
 int io_sync_cancel(struct io_ring_ctx *ctx, void __user *arg)
 	__must_hold(&ctx->uring_lock)
 {
@@ -281,7 +304,6 @@ int io_sync_cancel(struct io_ring_ctx *ctx, void __user *arg)
 	cd.flags = sc.flags;
 	cd.opcode = sc.opcode;
 
-	/* we can grab a normal file descriptor upfront */
 	if ((cd.flags & IORING_ASYNC_CANCEL_FD) &&
 	   !(cd.flags & IORING_ASYNC_CANCEL_FD_FIXED)) {
 		file = fget(sc.fd);
@@ -292,7 +314,6 @@ int io_sync_cancel(struct io_ring_ctx *ctx, void __user *arg)
 
 	ret = __io_sync_cancel(current->io_uring, &cd, sc.fd);
 
-	/* found something, done! */
 	if (ret != -EALREADY)
 		goto out;
 
@@ -305,15 +326,9 @@ int io_sync_cancel(struct io_ring_ctx *ctx, void __user *arg)
 		timeout = ktime_add_ns(timespec64_to_ktime(ts), ktime_get_ns());
 	}
 
-	/*
-	 * Keep looking until we get -ENOENT. we'll get woken everytime
-	 * every time a request completes and will retry the cancelation.
-	 */
 	do {
 		cd.seq = atomic_inc_return(&ctx->cancel_seq);
-
 		prepare_to_wait(&ctx->cq_wait, &wait, TASK_INTERRUPTIBLE);
-
 		ret = __io_sync_cancel(current->io_uring, &cd, sc.fd);
 
 		mutex_unlock(&ctx->uring_lock);
@@ -342,6 +357,9 @@ out:
 	return ret;
 }
 
+/*
+ * Menghapus dan membatalkan semua request dari list sesuai kriteria.
+ */
 bool io_cancel_remove_all(struct io_ring_ctx *ctx, struct io_uring_task *tctx,
 			  struct hlist_head *list, bool cancel_all,
 			  bool (*cancel)(struct io_kiocb *))
@@ -363,6 +381,9 @@ bool io_cancel_remove_all(struct io_ring_ctx *ctx, struct io_uring_task *tctx,
 	return found;
 }
 
+/*
+ * Mencari dan membatalkan request yang cocok dalam list tertentu.
+ */
 int io_cancel_remove(struct io_ring_ctx *ctx, struct io_cancel_data *cd,
 		     unsigned int issue_flags, struct hlist_head *list,
 		     bool (*cancel)(struct io_kiocb *))
@@ -383,3 +404,4 @@ int io_cancel_remove(struct io_ring_ctx *ctx, struct io_cancel_data *cd,
 	io_ring_submit_unlock(ctx, issue_flags);
 	return nr ?: -ENOENT;
 }
+

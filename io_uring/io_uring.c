@@ -132,22 +132,30 @@ struct io_defer_entry {
 	u32			seq;
 };
 
-/* requests with any of those set should undergo io_disarm_next() */
+/* permintaan dengan flag berikut harus melewati io_disarm_next() */
 #define IO_DISARM_MASK (REQ_F_ARM_LTIMEOUT | REQ_F_LINK_TIMEOUT | REQ_F_FAIL)
 
 /*
- * No waiters. It's larger than any valid value of the tw counter
- * so that tests against ->cq_wait_nr would fail and skip wake_up().
+ * Tidak ada proses menunggu. Nilai ini lebih besar dari nilai valid
+ * pada penghitung tw, sehingga pengecekan ->cq_wait_nr akan gagal dan
+ * wake_up() dilewati.
  */
 #define IO_CQ_WAKE_INIT		(-1U)
-/* Forced wake up if there is a waiter regardless of ->cq_wait_nr */
+/* Wake up dipaksakan jika ada proses yang menunggu meskipun ->cq_wait_nr bernilai nol */
 #define IO_CQ_WAKE_FORCE	(IO_CQ_WAKE_INIT >> 1)
 
+/**
+ * Membatalkan request yang sedang berjalan dalam io_uring untuk konteks dan task tertentu,
+ * dengan opsi membatalkan semua request dan pengecekan apakah berjalan di thread SQPOLL.
+ */
 static bool io_uring_try_cancel_requests(struct io_ring_ctx *ctx,
 					 struct io_uring_task *tctx,
 					 bool cancel_all,
 					 bool is_sqpoll_thread);
 
+ /**
+  * Menjadwalkan SQE (Submission Queue Entry) untuk diproses
+  */
 static void io_queue_sqe(struct io_kiocb *req);
 
 static __read_mostly DEFINE_STATIC_KEY_FALSE(io_key_has_sqarray);
@@ -179,16 +187,25 @@ static const struct ctl_table kernel_io_uring_disabled_table[] = {
 };
 #endif
 
+/**
+ * Mengembalikan jumlah event di completion queue yang dapat diproses oleh kernel
+ */
 static inline unsigned int __io_cqring_events(struct io_ring_ctx *ctx)
 {
 	return ctx->cached_cq_tail - READ_ONCE(ctx->rings->cq.head);
 }
 
+/**
+ * Mengembalikan jumlah event di completion queue yang terlihat oleh userspace
+ */
 static inline unsigned int __io_cqring_events_user(struct io_ring_ctx *ctx)
 {
 	return READ_ONCE(ctx->rings->cq.tail) - READ_ONCE(ctx->rings->cq.head);
 }
 
+/**
+ * Mengecek apakah ada request yang tertaut (linked) dan masih berjalan (inflight)
+ */
 static bool io_match_linked(struct io_kiocb *head)
 {
 	struct io_kiocb *req;
@@ -200,9 +217,9 @@ static bool io_match_linked(struct io_kiocb *head)
 	return false;
 }
 
-/*
- * As io_match_task() but protected against racing with linked timeouts.
- * User must not hold timeout_lock.
+/**
+ * Sama seperti io_match_linked, tetapi dilindungi dari race dengan timeout,
+ * dan dapat membatasi pencocokan pada task tertentu
  */
 bool io_match_task_safe(struct io_kiocb *head, struct io_uring_task *tctx,
 			bool cancel_all)
@@ -217,7 +234,7 @@ bool io_match_task_safe(struct io_kiocb *head, struct io_uring_task *tctx,
 	if (head->flags & REQ_F_LINK_TIMEOUT) {
 		struct io_ring_ctx *ctx = head->ctx;
 
-		/* protect against races with linked timeouts */
+		/* lindungi dari race dengan timeout yang tertaut */
 		raw_spin_lock_irq(&ctx->timeout_lock);
 		matched = io_match_linked(head);
 		raw_spin_unlock_irq(&ctx->timeout_lock);
@@ -227,17 +244,26 @@ bool io_match_task_safe(struct io_kiocb *head, struct io_uring_task *tctx,
 	return matched;
 }
 
+/**
+ * Menandai permintaan sebagai gagal dan menyetel nilai hasilnya
+ */
 static inline void req_fail_link_node(struct io_kiocb *req, int res)
 {
 	req_set_fail(req);
 	io_req_set_res(req, res, 0);
 }
 
+/**
+ * Mengembalikan request yang selesai ke cache submission queue
+ */
 static inline void io_req_add_to_cache(struct io_kiocb *req, struct io_ring_ctx *ctx)
 {
 	wq_stack_add_head(&req->comp_list, &ctx->submit_state.free_list);
 }
 
+/**
+ * Callback saat refcount dari io_ring_ctx menjadi nol; digunakan untuk pembersihan akhir
+ */
 static __cold void io_ring_ctx_ref_free(struct percpu_ref *ref)
 {
 	struct io_ring_ctx *ctx = container_of(ref, struct io_ring_ctx, refs);
@@ -245,6 +271,9 @@ static __cold void io_ring_ctx_ref_free(struct percpu_ref *ref)
 	complete(&ctx->ref_comp);
 }
 
+/**
+ * Fungsi worker fallback yang mengeksekusi io_task_work yang tertunda jika tidak ada thread aktif
+ */
 static __cold void io_fallback_req_func(struct work_struct *work)
 {
 	struct io_ring_ctx *ctx = container_of(work, struct io_ring_ctx,
@@ -262,6 +291,9 @@ static __cold void io_fallback_req_func(struct work_struct *work)
 	percpu_ref_put(&ctx->refs);
 }
 
+/**
+ * Mengalokasikan dan menginisialisasi tabel hash untuk io_uring dengan jumlah bit tertentu
+ */
 static int io_alloc_hash_table(struct io_hash_table *table, unsigned bits)
 {
 	unsigned int hash_buckets;
@@ -284,6 +316,13 @@ static int io_alloc_hash_table(struct io_hash_table *table, unsigned bits)
 	return 0;
 }
 
+/**
+ * io_free_alloc_caches - Membebaskan semua cache alokasi internal dari konteks io_uring
+ * @ctx: Pointer ke struktur io_ring_ctx
+ *
+ * Fungsi ini bertanggung jawab untuk membebaskan berbagai cache alokasi internal
+ * yang digunakan selama siklus hidup io_ring_ctx.
+ */
 static void io_free_alloc_caches(struct io_ring_ctx *ctx)
 {
 	io_alloc_cache_free(&ctx->apoll_cache, kfree);
@@ -295,6 +334,16 @@ static void io_free_alloc_caches(struct io_ring_ctx *ctx)
 	io_rsrc_cache_free(ctx);
 }
 
+/**
+ * io_ring_ctx_alloc - Mengalokasikan dan menginisialisasi konteks io_uring
+ * @p: Parameter konfigurasi dari pengguna (user space)
+ *
+ * Fungsi ini mengalokasikan struktur io_ring_ctx dan semua dependensi internal,
+ * termasuk tabel hash, refcount, dan berbagai cache yang diperlukan untuk
+ * menangani operasi io_uring.
+ *
+ * Return: Pointer ke konteks yang berhasil dialokasikan, atau NULL jika gagal.
+ */
 static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 {
 	struct io_ring_ctx *ctx;
@@ -307,17 +356,11 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 
 	xa_init(&ctx->io_bl_xa);
 
-	/*
-	 * Use 5 bits less than the max cq entries, that should give us around
-	 * 32 entries per hash list if totally full and uniformly spread, but
-	 * don't keep too many buckets to not overconsume memory.
-	 */
 	hash_bits = ilog2(p->cq_entries) - 5;
 	hash_bits = clamp(hash_bits, 1, 8);
 	if (io_alloc_hash_table(&ctx->cancel_table, hash_bits))
 		goto err;
-	if (percpu_ref_init(&ctx->refs, io_ring_ctx_ref_free,
-			    0, GFP_KERNEL))
+	if (percpu_ref_init(&ctx->refs, io_ring_ctx_ref_free, 0, GFP_KERNEL))
 		goto err;
 
 	ctx->flags = p->flags;
@@ -326,6 +369,7 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	init_waitqueue_head(&ctx->sqo_sq_wait);
 	INIT_LIST_HEAD(&ctx->sqd_list);
 	INIT_LIST_HEAD(&ctx->cq_overflow_list);
+
 	ret = io_alloc_cache_init(&ctx->apoll_cache, IO_POLL_ALLOC_CACHE_MAX,
 			    sizeof(struct async_poll), 0);
 	ret |= io_alloc_cache_init(&ctx->netmsg_cache, IO_ALLOC_CACHE_MAX,
@@ -344,6 +388,7 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	ret |= io_rsrc_cache_init(ctx);
 	if (ret)
 		goto free_ref;
+
 	init_completion(&ctx->ref_comp);
 	xa_init_flags(&ctx->personalities, XA_FLAGS_ALLOC1);
 	mutex_init(&ctx->uring_lock);
@@ -380,6 +425,12 @@ err:
 	return NULL;
 }
 
+/**
+ * io_account_cq_overflow - Menambah penghitung overflow pada CQ
+ * @ctx: Konteks io_ring
+ *
+ * Fungsi ini mencatat bahwa sebuah entry gagal dimasukkan ke CQ karena penuh.
+ */
 static void io_account_cq_overflow(struct io_ring_ctx *ctx)
 {
 	struct io_rings *r = ctx->rings;
@@ -388,6 +439,13 @@ static void io_account_cq_overflow(struct io_ring_ctx *ctx)
 	ctx->cq_extra--;
 }
 
+/**
+ * req_need_defer - Mengecek apakah request perlu ditunda (defer)
+ * @req: Request I/O
+ * @seq: Nomor urutan (sequence number)
+ *
+ * Return: true jika request perlu ditunda karena urutan CQ tidak sesuai.
+ */
 static bool req_need_defer(struct io_kiocb *req, u32 seq)
 {
 	if (unlikely(req->flags & REQ_F_IO_DRAIN)) {
@@ -395,10 +453,15 @@ static bool req_need_defer(struct io_kiocb *req, u32 seq)
 
 		return seq + READ_ONCE(ctx->cq_extra) != ctx->cached_cq_tail;
 	}
-
 	return false;
 }
 
+/**
+ * io_clean_op - Membersihkan dan melepaskan resource dari request
+ * @req: Request I/O yang sudah selesai
+ *
+ * Termasuk pembersihan kredensial, data async, polling, dan buffer.
+ */
 static void io_clean_op(struct io_kiocb *req)
 {
 	if (unlikely(req->flags & REQ_F_BUFFER_SELECTED))
@@ -426,6 +489,10 @@ static void io_clean_op(struct io_kiocb *req)
 	req->flags &= ~IO_REQ_CLEAN_FLAGS;
 }
 
+/**
+ * io_req_track_inflight - Menandai request sebagai inflight dan update penghitung
+ * @req: Request I/O
+ */
 static inline void io_req_track_inflight(struct io_kiocb *req)
 {
 	if (!(req->flags & REQ_F_INFLIGHT)) {
@@ -434,6 +501,12 @@ static inline void io_req_track_inflight(struct io_kiocb *req)
 	}
 }
 
+/**
+ * __io_prep_linked_timeout - Menyiapkan request timeout yang ditautkan (linked)
+ * @req: Request I/O
+ *
+ * Return: Pointer ke request linked timeout.
+ */
 static struct io_kiocb *__io_prep_linked_timeout(struct io_kiocb *req)
 {
 	if (WARN_ON_ONCE(!req->link))
@@ -442,12 +515,17 @@ static struct io_kiocb *__io_prep_linked_timeout(struct io_kiocb *req)
 	req->flags &= ~REQ_F_ARM_LTIMEOUT;
 	req->flags |= REQ_F_LINK_TIMEOUT;
 
-	/* linked timeouts should have two refs once prep'ed */
 	io_req_set_refcount(req);
 	__io_req_set_refcount(req->link, 2);
 	return req->link;
 }
 
+/**
+ * io_prep_linked_timeout - Wrapper untuk __io_prep_linked_timeout
+ * @req: Request I/O
+ *
+ * Return: Linked timeout jika REQ_F_ARM_LTIMEOUT diset, NULL jika tidak.
+ */
 static inline struct io_kiocb *io_prep_linked_timeout(struct io_kiocb *req)
 {
 	if (likely(!(req->flags & REQ_F_ARM_LTIMEOUT)))
@@ -455,17 +533,31 @@ static inline struct io_kiocb *io_prep_linked_timeout(struct io_kiocb *req)
 	return __io_prep_linked_timeout(req);
 }
 
+/**
+ * __io_arm_ltimeout - Menjadwalkan timeout yang ditautkan
+ * @req: Request I/O
+ */
 static noinline void __io_arm_ltimeout(struct io_kiocb *req)
 {
 	io_queue_linked_timeout(__io_prep_linked_timeout(req));
 }
 
+/**
+ * io_arm_ltimeout - Wrapper untuk mengaktifkan linked timeout jika diperlukan
+ * @req: Request I/O
+ */
 static inline void io_arm_ltimeout(struct io_kiocb *req)
 {
 	if (unlikely(req->flags & REQ_F_ARM_LTIMEOUT))
 		__io_arm_ltimeout(req);
 }
 
+/**
+ * io_prep_async_work - Persiapkan request untuk dieksekusi secara asynchronous
+ * @req: Request I/O
+ *
+ * Mengatur flag, kredensial, dan hash work queue jika diperlukan.
+ */
 static void io_prep_async_work(struct io_kiocb *req)
 {
 	const struct io_issue_def *def = &io_issue_defs[req->opcode];
@@ -487,7 +579,6 @@ static void io_prep_async_work(struct io_kiocb *req)
 	if (req->file && (req->flags & REQ_F_ISREG)) {
 		bool should_hash = def->hash_reg_file;
 
-		/* don't serialize this request if the fs doesn't need it */
 		if (should_hash && (req->file->f_flags & O_DIRECT) &&
 		    (req->file->f_op->fop_flags & FOP_DIO_PARALLEL_WRITE))
 			should_hash = false;
@@ -499,6 +590,10 @@ static void io_prep_async_work(struct io_kiocb *req)
 	}
 }
 
+/**
+ * io_prep_async_link - Persiapan async untuk semua request yang tertaut
+ * @req: Request utama (head)
+ */
 static void io_prep_async_link(struct io_kiocb *req)
 {
 	struct io_kiocb *cur;
@@ -516,6 +611,10 @@ static void io_prep_async_link(struct io_kiocb *req)
 	}
 }
 
+/**
+ * io_queue_iowq - Menjadwalkan request ke antrean io-wq
+ * @req: Request I/O
+ */
 static void io_queue_iowq(struct io_kiocb *req)
 {
 	struct io_kiocb *link = io_prep_linked_timeout(req);
@@ -528,16 +627,8 @@ static void io_queue_iowq(struct io_kiocb *req)
 		return;
 	}
 
-	/* init ->work of the whole link before punting */
 	io_prep_async_link(req);
 
-	/*
-	 * Not expected to happen, but if we do have a bug where this _can_
-	 * happen, catch it here and ensure the request is marked as
-	 * canceled. That will make io-wq go through the usual work cancel
-	 * procedure rather than attempt to run this request (or create a new
-	 * worker for it).
-	 */
 	if (WARN_ON_ONCE(!same_thread_group(tctx->task, current)))
 		atomic_or(IO_WQ_WORK_CANCEL, &req->work.flags);
 
@@ -547,17 +638,33 @@ static void io_queue_iowq(struct io_kiocb *req)
 		io_queue_linked_timeout(link);
 }
 
+/**
+ * io_req_queue_iowq_tw - Wrapper task_work untuk queue iowq
+ * @req: Request I/O
+ * @tw: Token task_work
+ */
 static void io_req_queue_iowq_tw(struct io_kiocb *req, io_tw_token_t tw)
 {
 	io_queue_iowq(req);
 }
 
+/**
+ * io_req_queue_iowq - Menjadwalkan request ke io-wq via task_work
+ * @req: Request I/O
+ */
 void io_req_queue_iowq(struct io_kiocb *req)
 {
 	req->io_task_work.func = io_req_queue_iowq_tw;
 	io_req_task_work_add(req);
 }
 
+/**
+ * io_queue_deferred - Menjadwalkan semua request yang tertunda jika memungkinkan
+ * @ctx: Konteks io_ring
+ *
+ * Fungsi ini dipanggil ketika kondisi defer tidak lagi berlaku,
+ * dan request bisa diproses.
+ */
 static __cold noinline void io_queue_deferred(struct io_ring_ctx *ctx)
 {
 	spin_lock(&ctx->completion_lock);
@@ -574,43 +681,58 @@ static __cold noinline void io_queue_deferred(struct io_ring_ctx *ctx)
 	spin_unlock(&ctx->completion_lock);
 }
 
+/*
+ * Flush berbagai status dan kondisi dalam completion queue ring.
+ * Digunakan setelah melakukan commit terhadap CQ ring.
+ */
 void __io_commit_cqring_flush(struct io_ring_ctx *ctx)
 {
 	if (ctx->poll_activated)
-		io_poll_wq_wake(ctx);
+		io_poll_wq_wake(ctx); // Bangunkan thread polling jika aktif
 	if (ctx->off_timeout_used)
-		io_flush_timeouts(ctx);
+		io_flush_timeouts(ctx); // Flush timeout yang tertunda
 	if (ctx->drain_active)
-		io_queue_deferred(ctx);
+		io_queue_deferred(ctx); // Proses permintaan yang tertunda (deferred)
 	if (ctx->has_evfd)
-		io_eventfd_flush_signal(ctx);
+		io_eventfd_flush_signal(ctx); // Kirim sinyal eventfd jika ada
 }
 
+/*
+ * Mengunci completion queue (jika tidak menggunakan mode lockless).
+ */
 static inline void __io_cq_lock(struct io_ring_ctx *ctx)
 {
 	if (!ctx->lockless_cq)
 		spin_lock(&ctx->completion_lock);
 }
 
+/*
+ * Kunci eksplisit untuk completion queue, selalu menggunakan spinlock.
+ */
 static inline void io_cq_lock(struct io_ring_ctx *ctx)
 	__acquires(ctx->completion_lock)
 {
 	spin_lock(&ctx->completion_lock);
 }
 
+/*
+ * Melepaskan kunci completion queue dan melakukan wake-up jika diperlukan.
+ */
 static inline void __io_cq_unlock_post(struct io_ring_ctx *ctx)
 {
 	io_commit_cqring(ctx);
 	if (!ctx->task_complete) {
 		if (!ctx->lockless_cq)
 			spin_unlock(&ctx->completion_lock);
-		/* IOPOLL rings only need to wake up if it's also SQPOLL */
 		if (!ctx->syscall_iopoll)
-			io_cqring_wake(ctx);
+			io_cqring_wake(ctx); // Bangunkan proses yang menunggu CQ
 	}
 	io_commit_cqring_flush(ctx);
 }
 
+/*
+ * Versi eksplisit dari unlock untuk completion queue.
+ */
 static void io_cq_unlock_post(struct io_ring_ctx *ctx)
 	__releases(ctx->completion_lock)
 {
@@ -620,18 +742,21 @@ static void io_cq_unlock_post(struct io_ring_ctx *ctx)
 	io_commit_cqring_flush(ctx);
 }
 
+/*
+ * Flush overflow CQE (completion queue entry) jika terjadi overflow,
+ * baik saat normal maupun saat konteks akan di-destroy.
+ */
 static void __io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool dying)
 {
 	size_t cqe_size = sizeof(struct io_uring_cqe);
 
 	lockdep_assert_held(&ctx->uring_lock);
 
-	/* don't abort if we're dying, entries must get freed */
 	if (!dying && __io_cqring_events(ctx) == ctx->cq_entries)
 		return;
 
 	if (ctx->flags & IORING_SETUP_CQE32)
-		cqe_size <<= 1;
+		cqe_size <<= 1; // Ukuran dobel jika CQE32 digunakan
 
 	io_cq_lock(ctx);
 	while (!list_empty(&ctx->cq_overflow_list)) {
@@ -649,17 +774,11 @@ static void __io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool dying)
 		list_del(&ocqe->list);
 		kfree(ocqe);
 
-		/*
-		 * For silly syzbot cases that deliberately overflow by huge
-		 * amounts, check if we need to resched and drop and
-		 * reacquire the locks if so. Nothing real would ever hit this.
-		 * Ideally we'd have a non-posting unlock for this, but hard
-		 * to care for a non-real case.
-		 */
+		// Jika perlu reschedule (misalnya saat terlalu lama di kernel)
 		if (need_resched()) {
 			io_cq_unlock_post(ctx);
 			mutex_unlock(&ctx->uring_lock);
-			cond_resched();
+			cond_resched(); // Beri kesempatan scheduler
 			mutex_lock(&ctx->uring_lock);
 			io_cq_lock(ctx);
 		}
@@ -672,12 +791,18 @@ static void __io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool dying)
 	io_cq_unlock_post(ctx);
 }
 
+/*
+ * Hapus seluruh entri overflow CQE jika sedang shutdown.
+ */
 static void io_cqring_overflow_kill(struct io_ring_ctx *ctx)
 {
 	if (ctx->rings)
 		__io_cqring_overflow_flush(ctx, true);
 }
 
+/*
+ * Lakukan overflow flush dalam kondisi normal.
+ */
 static void io_cqring_do_overflow_flush(struct io_ring_ctx *ctx)
 {
 	mutex_lock(&ctx->uring_lock);
@@ -685,7 +810,9 @@ static void io_cqring_do_overflow_flush(struct io_ring_ctx *ctx)
 	mutex_unlock(&ctx->uring_lock);
 }
 
-/* must to be called somewhat shortly after putting a request */
+/*
+ * Melepaskan referensi task dari request. Jika masih pada task aktif, cache dulu.
+ */
 static inline void io_put_task(struct io_kiocb *req)
 {
 	struct io_uring_task *tctx = req->tctx;
@@ -700,6 +827,9 @@ static inline void io_put_task(struct io_kiocb *req)
 	}
 }
 
+/*
+ * Refill cache referensi task.
+ */
 void io_task_refs_refill(struct io_uring_task *tctx)
 {
 	unsigned int refill = -tctx->cached_refs + IO_TCTX_REFS_CACHE_NR;
@@ -709,6 +839,9 @@ void io_task_refs_refill(struct io_uring_task *tctx)
 	tctx->cached_refs += refill;
 }
 
+/*
+ * Buang seluruh cached task reference jika konteks task selesai.
+ */
 static __cold void io_uring_drop_tctx_refs(struct task_struct *task)
 {
 	struct io_uring_task *tctx = task->io_uring;
@@ -721,6 +854,9 @@ static __cold void io_uring_drop_tctx_refs(struct task_struct *task)
 	}
 }
 
+/*
+ * Tambahkan entri CQE ke list overflow jika tidak bisa langsung ditulis.
+ */
 static bool io_cqring_event_overflow(struct io_ring_ctx *ctx, u64 user_data,
 				     s32 res, u32 cflags, u64 extra1, u64 extra2)
 {
@@ -736,11 +872,6 @@ static bool io_cqring_event_overflow(struct io_ring_ctx *ctx, u64 user_data,
 	ocqe = kmalloc(ocq_size, GFP_ATOMIC | __GFP_ACCOUNT);
 	trace_io_uring_cqe_overflow(ctx, user_data, res, cflags, ocqe);
 	if (!ocqe) {
-		/*
-		 * If we're in ring overflow flush mode, or in task cancel mode,
-		 * or cannot allocate an overflow entry, then we need to drop it
-		 * on the floor.
-		 */
 		io_account_cq_overflow(ctx);
 		set_bit(IO_CHECK_CQ_DROPPED_BIT, &ctx->check_cq);
 		return false;
@@ -748,7 +879,6 @@ static bool io_cqring_event_overflow(struct io_ring_ctx *ctx, u64 user_data,
 	if (list_empty(&ctx->cq_overflow_list)) {
 		set_bit(IO_CHECK_CQ_OVERFLOW_BIT, &ctx->check_cq);
 		atomic_or(IORING_SQ_CQ_OVERFLOW, &ctx->rings->sq_flags);
-
 	}
 	ocqe->cqe.user_data = user_data;
 	ocqe->cqe.res = res;
@@ -761,6 +891,9 @@ static bool io_cqring_event_overflow(struct io_ring_ctx *ctx, u64 user_data,
 	return true;
 }
 
+/*
+ * Digunakan untuk menaruh hasil CQE multishot ke overflow.
+ */
 static void io_req_cqe_overflow(struct io_kiocb *req)
 {
 	io_cqring_event_overflow(req->ctx, req->cqe.user_data,
@@ -770,9 +903,7 @@ static void io_req_cqe_overflow(struct io_kiocb *req)
 }
 
 /*
- * writes to the cq entry need to come after reading head; the
- * control dependency is enough as we're using WRITE_ONCE to
- * fill the cq entry
+ * Refill cache CQE dari ring, digunakan sebelum pengisian CQE.
  */
 bool io_cqe_cache_refill(struct io_ring_ctx *ctx, bool overflow)
 {
@@ -780,18 +911,11 @@ bool io_cqe_cache_refill(struct io_ring_ctx *ctx, bool overflow)
 	unsigned int off = ctx->cached_cq_tail & (ctx->cq_entries - 1);
 	unsigned int free, queued, len;
 
-	/*
-	 * Posting into the CQ when there are pending overflowed CQEs may break
-	 * ordering guarantees, which will affect links, F_MORE users and more.
-	 * Force overflow the completion.
-	 */
 	if (!overflow && (ctx->check_cq & BIT(IO_CHECK_CQ_OVERFLOW_BIT)))
 		return false;
 
-	/* userspace may cheat modifying the tail, be safe and do min */
 	queued = min(__io_cqring_events(ctx), ctx->cq_entries);
 	free = ctx->cq_entries - queued;
-	/* we need a contiguous range, limit based on the current array offset */
 	len = min(free, ctx->cq_entries - off);
 	if (!len)
 		return false;
@@ -806,6 +930,9 @@ bool io_cqe_cache_refill(struct io_ring_ctx *ctx, bool overflow)
 	return true;
 }
 
+/*
+ * Helper untuk mengisi entri CQE tambahan.
+ */
 static bool io_fill_cqe_aux(struct io_ring_ctx *ctx, u64 user_data, s32 res,
 			      u32 cflags)
 {
@@ -813,11 +940,6 @@ static bool io_fill_cqe_aux(struct io_ring_ctx *ctx, u64 user_data, s32 res,
 
 	ctx->cq_extra++;
 
-	/*
-	 * If we can't get a cq entry, userspace overflowed the
-	 * submission (by quite a lot). Increment the overflow count in
-	 * the ring.
-	 */
 	if (likely(io_get_cqe(ctx, &cqe))) {
 		WRITE_ONCE(cqe->user_data, user_data);
 		WRITE_ONCE(cqe->res, res);
@@ -834,6 +956,9 @@ static bool io_fill_cqe_aux(struct io_ring_ctx *ctx, u64 user_data, s32 res,
 	return false;
 }
 
+/*
+ * Posting auxiliary CQE yang berasal dari luar proses permintaan biasa.
+ */
 bool io_post_aux_cqe(struct io_ring_ctx *ctx, u64 user_data, s32 res, u32 cflags)
 {
 	bool filled;
@@ -847,8 +972,7 @@ bool io_post_aux_cqe(struct io_ring_ctx *ctx, u64 user_data, s32 res, u32 cflags
 }
 
 /*
- * Must be called from inline task_work so we now a flush will happen later,
- * and obviously with ctx->uring_lock held (tw always has that).
+ * Menambahkan auxiliary CQE, dipanggil dari task_work.
  */
 void io_add_aux_cqe(struct io_ring_ctx *ctx, u64 user_data, s32 res, u32 cflags)
 {
@@ -861,8 +985,7 @@ void io_add_aux_cqe(struct io_ring_ctx *ctx, u64 user_data, s32 res, u32 cflags)
 }
 
 /*
- * A helper for multishot requests posting additional CQEs.
- * Should only be used from a task_work including IO_URING_F_MULTISHOT.
+ * Posting CQE tambahan untuk permintaan multishot.
  */
 bool io_req_post_cqe(struct io_kiocb *req, s32 res, u32 cflags)
 {
@@ -878,6 +1001,7 @@ bool io_req_post_cqe(struct io_kiocb *req, s32 res, u32 cflags)
 	__io_cq_unlock_post(ctx);
 	return posted;
 }
+
 
 static void io_req_complete_post(struct io_kiocb *req, unsigned issue_flags)
 {
