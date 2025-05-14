@@ -27,216 +27,213 @@ enum {
 	IO_SQ_THREAD_SHOULD_PARK,
 };
 
+// Fungsi ini digunakan untuk membangunkan thread yang sedang diparkir.
 void io_sq_thread_unpark(struct io_sq_data *sqd)
-	__releases(&sqd->lock)
+    __releases(&sqd->lock)
 {
-	WARN_ON_ONCE(sqd->thread == current);
+    WARN_ON_ONCE(sqd->thread == current);
 
-	/*
-	 * Do the dance but not conditional clear_bit() because it'd race with
-	 * other threads incrementing park_pending and setting the bit.
-	 */
-	clear_bit(IO_SQ_THREAD_SHOULD_PARK, &sqd->state);
-	if (atomic_dec_return(&sqd->park_pending))
-		set_bit(IO_SQ_THREAD_SHOULD_PARK, &sqd->state);
-	mutex_unlock(&sqd->lock);
-	wake_up(&sqd->wait);
+    // Menghapus bit park dan memeriksa apakah perlu membangunkan thread
+    clear_bit(IO_SQ_THREAD_SHOULD_PARK, &sqd->state);
+    if (atomic_dec_return(&sqd->park_pending))
+        set_bit(IO_SQ_THREAD_SHOULD_PARK, &sqd->state);
+    mutex_unlock(&sqd->lock);
+    wake_up(&sqd->wait);
 }
 
+// Fungsi ini digunakan untuk memarkir thread agar berhenti sementara.
 void io_sq_thread_park(struct io_sq_data *sqd)
-	__acquires(&sqd->lock)
+    __acquires(&sqd->lock)
 {
-	WARN_ON_ONCE(data_race(sqd->thread) == current);
+    WARN_ON_ONCE(data_race(sqd->thread) == current);
 
-	atomic_inc(&sqd->park_pending);
-	set_bit(IO_SQ_THREAD_SHOULD_PARK, &sqd->state);
-	mutex_lock(&sqd->lock);
-	if (sqd->thread)
-		wake_up_process(sqd->thread);
+    atomic_inc(&sqd->park_pending);
+    set_bit(IO_SQ_THREAD_SHOULD_PARK, &sqd->state);
+    mutex_lock(&sqd->lock);
+    if (sqd->thread)
+        wake_up_process(sqd->thread);
 }
 
+// Fungsi ini digunakan untuk menghentikan thread secara paksa.
 void io_sq_thread_stop(struct io_sq_data *sqd)
 {
-	WARN_ON_ONCE(sqd->thread == current);
-	WARN_ON_ONCE(test_bit(IO_SQ_THREAD_SHOULD_STOP, &sqd->state));
+    WARN_ON_ONCE(sqd->thread == current);
+    WARN_ON_ONCE(test_bit(IO_SQ_THREAD_SHOULD_STOP, &sqd->state));
 
-	set_bit(IO_SQ_THREAD_SHOULD_STOP, &sqd->state);
-	mutex_lock(&sqd->lock);
-	if (sqd->thread)
-		wake_up_process(sqd->thread);
-	mutex_unlock(&sqd->lock);
-	wait_for_completion(&sqd->exited);
+    set_bit(IO_SQ_THREAD_SHOULD_STOP, &sqd->state);
+    mutex_lock(&sqd->lock);
+    if (sqd->thread)
+        wake_up_process(sqd->thread);
+    mutex_unlock(&sqd->lock);
+    wait_for_completion(&sqd->exited);
 }
 
+// Fungsi ini digunakan untuk mengurangi referensi dan menghentikan thread jika tidak ada lagi referensi.
 void io_put_sq_data(struct io_sq_data *sqd)
 {
-	if (refcount_dec_and_test(&sqd->refs)) {
-		WARN_ON_ONCE(atomic_read(&sqd->park_pending));
+    if (refcount_dec_and_test(&sqd->refs)) {
+        WARN_ON_ONCE(atomic_read(&sqd->park_pending));
 
-		io_sq_thread_stop(sqd);
-		kfree(sqd);
-	}
+        io_sq_thread_stop(sqd);
+        kfree(sqd);
+    }
 }
 
+// Fungsi ini digunakan untuk memperbarui status idle thread dalam struktur io_sq_data.
 static __cold void io_sqd_update_thread_idle(struct io_sq_data *sqd)
 {
-	struct io_ring_ctx *ctx;
-	unsigned sq_thread_idle = 0;
+    struct io_ring_ctx *ctx;
+    unsigned sq_thread_idle = 0;
 
-	list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
-		sq_thread_idle = max(sq_thread_idle, ctx->sq_thread_idle);
-	sqd->sq_thread_idle = sq_thread_idle;
+    list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
+        sq_thread_idle = max(sq_thread_idle, ctx->sq_thread_idle);
+    sqd->sq_thread_idle = sq_thread_idle;
 }
 
+// Fungsi ini digunakan untuk menyelesaikan eksekusi thread dalam konteks io_ring_ctx.
 void io_sq_thread_finish(struct io_ring_ctx *ctx)
 {
-	struct io_sq_data *sqd = ctx->sq_data;
+    struct io_sq_data *sqd = ctx->sq_data;
 
-	if (sqd) {
-		io_sq_thread_park(sqd);
-		list_del_init(&ctx->sqd_list);
-		io_sqd_update_thread_idle(sqd);
-		io_sq_thread_unpark(sqd);
+    if (sqd) {
+        io_sq_thread_park(sqd);
+        list_del_init(&ctx->sqd_list);
+        io_sqd_update_thread_idle(sqd);
+        io_sq_thread_unpark(sqd);
 
-		io_put_sq_data(sqd);
-		ctx->sq_data = NULL;
-	}
+        io_put_sq_data(sqd);
+        ctx->sq_data = NULL;
+    }
 }
 
+// Fungsi ini digunakan untuk melampirkan data thread pada struktur io_sq_data yang sudah ada.
 static struct io_sq_data *io_attach_sq_data(struct io_uring_params *p)
 {
-	struct io_ring_ctx *ctx_attach;
-	struct io_sq_data *sqd;
-	CLASS(fd, f)(p->wq_fd);
+    struct io_ring_ctx *ctx_attach;
+    struct io_sq_data *sqd;
+    CLASS(fd, f)(p->wq_fd);
 
-	if (fd_empty(f))
-		return ERR_PTR(-ENXIO);
-	if (!io_is_uring_fops(fd_file(f)))
-		return ERR_PTR(-EINVAL);
+    if (fd_empty(f))
+        return ERR_PTR(-ENXIO);
+    if (!io_is_uring_fops(fd_file(f)))
+        return ERR_PTR(-EINVAL);
 
-	ctx_attach = fd_file(f)->private_data;
-	sqd = ctx_attach->sq_data;
-	if (!sqd)
-		return ERR_PTR(-EINVAL);
-	if (sqd->task_tgid != current->tgid)
-		return ERR_PTR(-EPERM);
+    ctx_attach = fd_file(f)->private_data;
+    sqd = ctx_attach->sq_data;
+    if (!sqd)
+        return ERR_PTR(-EINVAL);
+    if (sqd->task_tgid != current->tgid)
+        return ERR_PTR(-EPERM);
 
-	refcount_inc(&sqd->refs);
-	return sqd;
+    refcount_inc(&sqd->refs);
+    return sqd;
 }
 
+// Fungsi ini digunakan untuk mendapatkan data thread dalam struktur io_sq_data, baik itu melampirkan atau membuat baru.
 static struct io_sq_data *io_get_sq_data(struct io_uring_params *p,
-					 bool *attached)
+                                         bool *attached)
 {
-	struct io_sq_data *sqd;
+    struct io_sq_data *sqd;
 
-	*attached = false;
-	if (p->flags & IORING_SETUP_ATTACH_WQ) {
-		sqd = io_attach_sq_data(p);
-		if (!IS_ERR(sqd)) {
-			*attached = true;
-			return sqd;
-		}
-		/* fall through for EPERM case, setup new sqd/task */
-		if (PTR_ERR(sqd) != -EPERM)
-			return sqd;
-	}
+    *attached = false;
+    if (p->flags & IORING_SETUP_ATTACH_WQ) {
+        sqd = io_attach_sq_data(p);
+        if (!IS_ERR(sqd)) {
+            *attached = true;
+            return sqd;
+        }
+        if (PTR_ERR(sqd) != -EPERM)
+            return sqd;
+    }
 
-	sqd = kzalloc(sizeof(*sqd), GFP_KERNEL);
-	if (!sqd)
-		return ERR_PTR(-ENOMEM);
+    sqd = kzalloc(sizeof(*sqd), GFP_KERNEL);
+    if (!sqd)
+        return ERR_PTR(-ENOMEM);
 
-	atomic_set(&sqd->park_pending, 0);
-	refcount_set(&sqd->refs, 1);
-	INIT_LIST_HEAD(&sqd->ctx_list);
-	mutex_init(&sqd->lock);
-	init_waitqueue_head(&sqd->wait);
-	init_completion(&sqd->exited);
-	return sqd;
+    atomic_set(&sqd->park_pending, 0);
+    refcount_set(&sqd->refs, 1);
+    INIT_LIST_HEAD(&sqd->ctx_list);
+    mutex_init(&sqd->lock);
+    init_waitqueue_head(&sqd->wait);
+    init_completion(&sqd->exited);
+    return sqd;
 }
 
+// Fungsi ini digunakan untuk memeriksa apakah ada event yang tertunda pada io_sq_data.
 static inline bool io_sqd_events_pending(struct io_sq_data *sqd)
 {
-	return READ_ONCE(sqd->state);
+    return READ_ONCE(sqd->state);
 }
 
+// Fungsi ini digunakan untuk memproses dan mengirimkan submit queue entries dalam jumlah terbatas.
 static int __io_sq_thread(struct io_ring_ctx *ctx, bool cap_entries)
 {
-	unsigned int to_submit;
-	int ret = 0;
+    unsigned int to_submit;
+    int ret = 0;
 
-	to_submit = io_sqring_entries(ctx);
-	/* if we're handling multiple rings, cap submit size for fairness */
-	if (cap_entries && to_submit > IORING_SQPOLL_CAP_ENTRIES_VALUE)
-		to_submit = IORING_SQPOLL_CAP_ENTRIES_VALUE;
+    to_submit = io_sqring_entries(ctx);
+    if (cap_entries && to_submit > IORING_SQPOLL_CAP_ENTRIES_VALUE)
+        to_submit = IORING_SQPOLL_CAP_ENTRIES_VALUE;
 
-	if (to_submit || !wq_list_empty(&ctx->iopoll_list)) {
-		const struct cred *creds = NULL;
+    if (to_submit || !wq_list_empty(&ctx->iopoll_list)) {
+        const struct cred *creds = NULL;
 
-		if (ctx->sq_creds != current_cred())
-			creds = override_creds(ctx->sq_creds);
+        if (ctx->sq_creds != current_cred())
+            creds = override_creds(ctx->sq_creds);
 
-		mutex_lock(&ctx->uring_lock);
-		if (!wq_list_empty(&ctx->iopoll_list))
-			io_do_iopoll(ctx, true);
+        mutex_lock(&ctx->uring_lock);
+        if (!wq_list_empty(&ctx->iopoll_list))
+            io_do_iopoll(ctx, true);
 
-		/*
-		 * Don't submit if refs are dying, good for io_uring_register(),
-		 * but also it is relied upon by io_ring_exit_work()
-		 */
-		if (to_submit && likely(!percpu_ref_is_dying(&ctx->refs)) &&
-		    !(ctx->flags & IORING_SETUP_R_DISABLED))
-			ret = io_submit_sqes(ctx, to_submit);
-		mutex_unlock(&ctx->uring_lock);
+        if (to_submit && likely(!percpu_ref_is_dying(&ctx->refs)) &&
+            !(ctx->flags & IORING_SETUP_R_DISABLED))
+            ret = io_submit_sqes(ctx, to_submit);
+        mutex_unlock(&ctx->uring_lock);
 
-		if (to_submit && wq_has_sleeper(&ctx->sqo_sq_wait))
-			wake_up(&ctx->sqo_sq_wait);
-		if (creds)
-			revert_creds(creds);
-	}
+        if (to_submit && wq_has_sleeper(&ctx->sqo_sq_wait))
+            wake_up(&ctx->sqo_sq_wait);
+        if (creds)
+            revert_creds(creds);
+    }
 
-	return ret;
+    return ret;
 }
 
+// Fungsi ini menangani event untuk thread SQ, mengelola parkir thread dan pengecekan sinyal.
 static bool io_sqd_handle_event(struct io_sq_data *sqd)
 {
-	bool did_sig = false;
-	struct ksignal ksig;
+    bool did_sig = false;
+    struct ksignal ksig;
 
-	if (test_bit(IO_SQ_THREAD_SHOULD_PARK, &sqd->state) ||
-	    signal_pending(current)) {
-		mutex_unlock(&sqd->lock);
-		if (signal_pending(current))
-			did_sig = get_signal(&ksig);
-		wait_event(sqd->wait, !atomic_read(&sqd->park_pending));
-		mutex_lock(&sqd->lock);
-		sqd->sq_cpu = raw_smp_processor_id();
-	}
-	return did_sig || test_bit(IO_SQ_THREAD_SHOULD_STOP, &sqd->state);
+    if (test_bit(IO_SQ_THREAD_SHOULD_PARK, &sqd->state) ||
+        signal_pending(current)) {
+        mutex_unlock(&sqd->lock);
+        if (signal_pending(current))
+            did_sig = get_signal(&ksig);
+        wait_event(sqd->wait, !atomic_read(&sqd->park_pending));
+        mutex_lock(&sqd->lock);
+        sqd->sq_cpu = raw_smp_processor_id();
+    }
+    return did_sig || test_bit(IO_SQ_THREAD_SHOULD_STOP, &sqd->state);
 }
 
-/*
- * Run task_work, processing the retry_list first. The retry_list holds
- * entries that we passed on in the previous run, if we had more task_work
- * than we were asked to process. Newly queued task_work isn't run until the
- * retry list has been fully processed.
- */
+// Fungsi ini digunakan untuk memproses task work yang tertunda dan memasukkan ke dalam retry list jika diperlukan.
 static unsigned int io_sq_tw(struct llist_node **retry_list, int max_entries)
 {
-	struct io_uring_task *tctx = current->io_uring;
-	unsigned int count = 0;
+    struct io_uring_task *tctx = current->io_uring;
+    unsigned int count = 0;
 
-	if (*retry_list) {
-		*retry_list = io_handle_tw_list(*retry_list, &count, max_entries);
-		if (count >= max_entries)
-			goto out;
-		max_entries -= count;
-	}
-	*retry_list = tctx_task_work_run(tctx, max_entries, &count);
+    if (*retry_list) {
+        *retry_list = io_handle_tw_list(*retry_list, &count, max_entries);
+        if (count >= max_entries)
+            goto out;
+        max_entries -= count;
+    }
+    *retry_list = tctx_task_work_run(tctx, max_entries, &count);
 out:
-	if (task_work_pending(current))
-		task_work_run();
-	return count;
+    if (task_work_pending(current))
+        task_work_run();
+    return count;
 }
 
 static bool io_sq_tw_pending(struct llist_node *retry_list)
